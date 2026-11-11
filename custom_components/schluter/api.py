@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from datetime import datetime, timezone
 import logging
 from typing import Any
 
@@ -21,10 +20,10 @@ from .const import (
     API_AUTH_URL,
     API_THERMOSTAT_URL,
     API_THERMOSTATS_URL,
-    MIN_LOGIN_INTERVAL,
     REGULATION_MODE_MANUAL,
     REQUEST_TIMEOUT,
 )
+from .guard import LoginGuard
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -84,21 +83,28 @@ class Thermostat:
 
 
 class SchluterApi:
-    """Schluter cloud client with automatic re-login."""
+    """Schluter cloud client with automatic, rate-limited re-login."""
 
-    def __init__(self, session: ClientSession, email: str, password: str) -> None:
+    def __init__(
+        self,
+        session: ClientSession,
+        email: str,
+        password: str,
+        guard: LoginGuard | None = None,
+    ) -> None:
         self._session = session
         self._email = email
         self._password = password
+        # No guard = unthrottled (only for a user-initiated login check).
+        self._guard = guard
         self._session_id: str | None = None
-        self._last_login: datetime | None = None
         self._login_lock = asyncio.Lock()
         self.login_count = 0
 
     # ------------------------------------------------------------------ auth
 
     async def async_login(self) -> None:
-        """Log in and store a fresh session id."""
+        """Log in once and store a fresh session id (no throttling here)."""
         try:
             async with asyncio.timeout(REQUEST_TIMEOUT):
                 async with self._session.post(
@@ -112,9 +118,7 @@ class SchluterApi:
                     if resp.status == 401:
                         raise SchluterAuthError("Invalid email or password")
                     if resp.status != 200:
-                        raise SchluterError(
-                            f"Login failed: HTTP {resp.status}"
-                        )
+                        raise SchluterError(f"Login failed: HTTP {resp.status}")
                     data = await resp.json(content_type=None)
         except (ClientError, TimeoutError) as err:
             raise SchluterError(f"Cannot reach Schluter cloud: {err}") from err
@@ -127,28 +131,59 @@ class SchluterApi:
             raise SchluterError(f"Login returned no session (ErrorCode {code})")
 
         self._session_id = session_id
-        self._last_login = datetime.now(timezone.utc)
         self.login_count += 1
         _LOGGER.debug("Logged in to Schluter cloud (login #%s)", self.login_count)
 
-    async def _async_relogin(self, rejected_session: str | None) -> None:
-        """Log in again, unless another task already did, or we just did."""
+    async def _async_ensure_session(self) -> bool:
+        """Make sure we hold a session. Returns True if a new one was created.
+
+        Every login goes through the guard, so no matter how often HA polls or
+        retries setup, Schluter sees at most one login per backoff window.
+        """
         async with self._login_lock:
-            if self._session_id and self._session_id != rejected_session:
-                return  # someone else refreshed the session meanwhile
-            if (
-                self._last_login is not None
-                and datetime.now(timezone.utc) - self._last_login < MIN_LOGIN_INTERVAL
-            ):
-                # A session we created moments ago is already rejected.
-                # Don't hammer the login endpoint; let the next poll retry.
+            if self._session_id is not None:
+                return False  # another task logged in meanwhile
+            guard = self._guard
+            if guard is not None and (wait := guard.wait_time()) is not None:
                 raise SchluterError(
-                    "Schluter rejected a session that was created less than "
-                    f"{int(MIN_LOGIN_INTERVAL.total_seconds() // 60)} minutes ago; "
-                    "will retry later"
+                    "Holding off on Schluter logins to protect the account; "
+                    f"next attempt in {max(1, round(wait.total_seconds() / 60))} min"
                 )
-            _LOGGER.info("Schluter session expired; logging in again")
-            await self.async_login()
+            _LOGGER.info("Logging in to Schluter cloud")
+            try:
+                await self.async_login()
+            except SchluterAuthError:
+                if guard is not None:
+                    guard.login_failed(rejected=True)
+                raise
+            except SchluterError:
+                if guard is not None:
+                    guard.login_failed(rejected=False)
+                raise
+            if guard is not None:
+                guard.login_succeeded()
+            return True
+
+    def _session_rejected(self, fresh: bool) -> None:
+        """Handle a 401. Raise if the session was brand new."""
+        if not fresh:
+            _LOGGER.info("Schluter session expired; will log in again")
+            return
+        guard = self._guard
+        if guard is not None:
+            guard.login_failed(rejected=True)
+            if guard.should_reauth:
+                raise SchluterAuthError(
+                    "Schluter keeps rejecting new sessions; stopped logging in "
+                    "until you re-enter the password"
+                )
+            wait = guard.wait_time()
+            mins = max(1, round(wait.total_seconds() / 60)) if wait else 0
+            raise SchluterError(
+                "Schluter rejected a brand-new session (possible outage or "
+                f"account lock); next login attempt in {mins} min"
+            )
+        raise SchluterError("Schluter rejected a brand-new session (HTTP 401)")
 
     # --------------------------------------------------------------- requests
 
@@ -159,23 +194,22 @@ class SchluterApi:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
     ) -> Any:
-        """Make a call, re-logging in once on 401."""
-        if self._session_id is None:
-            async with self._login_lock:
-                if self._session_id is None:
-                    await self.async_login()
-
-        for attempt in (1, 2):
+        """Make a call, logging in (rate-limited) once if the session expired."""
+        for _attempt in (1, 2):
+            fresh = await self._async_ensure_session()
             session_id = self._session_id
             try:
-                return await self._raw_request(method, url, session_id, params, json)
+                result = await self._raw_request(method, url, session_id, params, json)
             except _SessionExpired:
-                if attempt == 2:
-                    raise SchluterError(
-                        "Schluter rejected the new session as well (HTTP 401)"
-                    ) from None
-                await self._async_relogin(session_id)
-        raise SchluterError("unreachable")
+                # Drop the dead session so polls don't keep sending it.
+                if self._session_id == session_id:
+                    self._session_id = None
+                self._session_rejected(fresh)
+                continue
+            if self._guard is not None:
+                self._guard.data_succeeded()
+            return result
+        raise SchluterError("Schluter rejected the session again (HTTP 401)")
 
     async def _raw_request(
         self,

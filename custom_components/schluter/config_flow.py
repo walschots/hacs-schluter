@@ -40,6 +40,11 @@ class SchluterConfigFlow(ConfigFlow, domain=DOMAIN):
         except Exception:  # noqa: BLE001
             _LOGGER.exception("Unexpected error validating Schluter login")
             return "unknown"
+        # The user just proved the login works: clear any backoff so the
+        # integration can start straight away.
+        from . import async_get_guard  # noqa: PLC0415
+
+        (await async_get_guard(self.hass, email)).reset()
         return None
 
     async def async_step_user(

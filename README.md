@@ -6,7 +6,8 @@ The built-in integration signs in once at startup. When Schluter later invalidat
 
 ## What's different from the built-in integration
 
-- **Self-healing session.** On a 401 it signs in again and retries once. Parallel calls share a single re-login. Logins are throttled to at most one every 5 minutes, so the account isn't hammered if Schluter keeps rejecting sessions.
+- **Self-healing session.** On a 401 it signs in again and retries once. Parallel calls share a single re-login.
+- **Account-safe login backoff.** At most one login every 5 minutes, stretching to 15, 30 and 60 minutes after consecutive failures. The limit is shared per account and saved to disk, so Home Assistant's setup retries, reloads and restarts can't bypass it. If Schluter rejects brand-new sessions 4 times in a row (an outage or a locked account), the integration stops logging in and shows a re-authenticate prompt instead.
 - **UI setup.** You set it up through a config flow, and the old `schluter:` YAML block is imported automatically. A real password change triggers a re-authentication prompt in the UI instead of failing silently.
 - **Same entities.** Thermostats keep the serial number as their unique ID, so your existing entity IDs, names and areas stay as they are.
 - **Extras.** A *Schedule* / *Manual* preset, `hvac_action` (heating or idle), and a *Heating power* sensor (W) for the Energy dashboard.
@@ -33,4 +34,6 @@ logger:
     custom_components.schluter: debug
 ```
 
-If the log shows *"Schluter rejected a session that was created less than 5 minutes ago"*, the cloud is rejecting brand-new sessions. That's a problem on Schluter's side (an account or API change), not an expired session.
+If the log shows *"Schluter rejected a brand-new session"*, the cloud is refusing fresh logins, usually an outage or a temporary account lock. The integration backs off on its own (*"next login attempt in N min"*). If you can't sign in to the Schluter app either, disable the integration until the app works again, then re-enable it.
+
+If you get a re-authenticate prompt, first check that the Schluter app accepts your password, then enter it in Home Assistant. A successful re-authentication clears the backoff.

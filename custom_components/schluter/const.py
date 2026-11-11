@@ -13,10 +13,6 @@ API_APPLICATION_ID = 7
 UPDATE_INTERVAL = timedelta(minutes=1)
 REQUEST_TIMEOUT = 20
 
-# Minimum time between two logins. Protects the account if Schluter starts
-# rejecting fresh sessions straight away, so we never hammer the login API.
-MIN_LOGIN_INTERVAL = timedelta(minutes=5)
-
 # Regulation modes used by the Schluter cloud.
 REGULATION_MODE_SCHEDULE = 1
 REGULATION_MODE_MANUAL = 3
