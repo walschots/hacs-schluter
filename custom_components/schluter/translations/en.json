@@ -1,0 +1,28 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Schluter DITRA-HEAT-E-WiFi",
+        "description": "Use the same email and password as the Schluter app.",
+        "data": { "email": "Email", "password": "Password" }
+      },
+      "reauth_confirm": {
+        "title": "Schluter sign-in rejected",
+        "description": "Schluter no longer accepts the password for {email}. Enter the current password from the Schluter app.",
+        "data": { "password": "Password" }
+      }
+    },
+    "error": {
+      "invalid_auth": "Email or password is incorrect.",
+      "cannot_connect": "Could not reach the Schluter cloud.",
+      "unknown": "Unexpected error, see the log."
+    },
+    "abort": {
+      "already_configured": "This Schluter account is already set up.",
+      "reauth_successful": "Password updated."
+    }
+  },
+  "entity": {
+    "sensor": { "heating_power": { "name": "Heating power" } }
+  }
+}

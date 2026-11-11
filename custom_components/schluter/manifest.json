@@ -1,0 +1,13 @@
+{
+  "domain": "schluter",
+  "name": "Schluter DITRA-HEAT-E-WiFi (self-healing)",
+  "codeowners": ["@walschots"],
+  "config_flow": true,
+  "dependencies": [],
+  "documentation": "https://github.com/walschots/hacs-schluter",
+  "integration_type": "hub",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/walschots/hacs-schluter/issues",
+  "requirements": [],
+  "version": "1.0.0"
+}
