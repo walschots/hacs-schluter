@@ -41,7 +41,7 @@ class SchluterThermostat(SchluterEntity, ClimateEntity):
 
     _attr_has_entity_name = True
     _attr_name = None
-    _attr_temperature_unit = UnitOfTemperature.CELSIUS
+    _attr_native_temperature_unit = UnitOfTemperature.CELSIUS
     _attr_target_temperature_step = 0.5
     _attr_hvac_modes = [HVACMode.HEAT]
     _attr_hvac_mode = HVACMode.HEAT
@@ -57,11 +57,11 @@ class SchluterThermostat(SchluterEntity, ClimateEntity):
         self._attr_unique_id = serial
 
     @property
-    def current_temperature(self) -> float | None:
+    def native_current_temperature(self) -> float | None:
         return self.thermostat.temperature if self.thermostat else None
 
     @property
-    def target_temperature(self) -> float | None:
+    def native_target_temperature(self) -> float | None:
         return self.thermostat.set_point_temp if self.thermostat else None
 
     @property
@@ -110,7 +110,7 @@ class SchluterThermostat(SchluterEntity, ClimateEntity):
                 )
             else:
                 # Manual = hold the current target temperature.
-                target = self.target_temperature or 21.0
+                target = self.native_target_temperature or 21.0
                 await self.coordinator.api.async_set_temperature(self._serial, target)
         except SchluterError as err:
             raise HomeAssistantError(f"Schluter: {err}") from err
